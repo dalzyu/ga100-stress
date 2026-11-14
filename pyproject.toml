@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ga100-stress"
+version = "0.1.0"
+description = "Stress and verification suite for GA100-class datacenter GPUs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "torch>=2.4",
+    "triton>=3.0",
+    "PyNvVideoCodec>=1.0",
+    "torchvision>=0.20",
+]
+
+[project.scripts]
+ga100-stress = "ga100_stress.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ga100_stress*"]
