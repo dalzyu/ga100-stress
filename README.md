@@ -2,12 +2,15 @@
 
 Stress and verification suite for GA100-class datacenter GPUs (A100 and
 derivatives). Pure userspace: it drives the GPU through its public APIs —
-CUDA via torch/triton, NVENC/NVDEC via PyNvVideoCodec, NVJPEG via
+CUDA via torch/triton, NVDEC via PyNvVideoCodec, NVJPEG via
 torchvision, optical flow via nvofapi, GL via EGL — and reports which units
 work.
 
 The suite measures and reports; it never asserts a particular card's unit
 counts. A card passes when every unit it exposes computes correctly.
+
+GA100 has no NVENC (the die has no encoder hardware), so there is
+intentionally no encoder test.
 
 ## Subcommands
 
