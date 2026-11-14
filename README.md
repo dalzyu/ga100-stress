@@ -15,7 +15,7 @@ counts. A card passes when every unit it exposes computes correctly.
 |---|---|---|
 | `sm` | SM coverage, FP32/FP64/INT compute | every observed SM executes and computes correctly; distinct-SM count reported |
 | `mem` | HBM capacity and integrity | multi-pattern fill/verify at ~95% capacity (auto-backs off to max viable), ECC uncorrected delta 0 |
-| `nvdec` | NVDEC engines | N concurrent decode sessions of an on-device-encoded stream; per-frame hashes identical across sessions, PSNR vs source above threshold |
+| `nvdec` | NVDEC engines | N concurrent decode sessions of a committed synthetic clip; per-frame hashes identical across sessions, PSNR vs source above threshold |
 | `nvjpeg` | NVJPEG engine | device JPEG decode matches CPU reference pixels |
 | `ofa` | optical flow accelerator | recovered flow field matches a known synthetic translation |
 | `gl` | GL via EGL (headless) | FBO render checksum matches CPU reference, CUDA↔GL interop round-trips |
@@ -32,6 +32,9 @@ ga100-stress all --json out.json # machine-readable verdict
 
 Exit code is 0 iff every run subcommand passed. `--json -` writes the JSON to
 stdout.
+
+The `nvdec` test uses a committed synthetic clip (`ga100_stress/data/`);
+regenerate it with `tools/gen_nvdec_vector.py` (needs the `dev` extra).
 
 ## MIG
 

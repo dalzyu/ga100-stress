@@ -43,9 +43,8 @@ def main(argv=None) -> int:
     p.add_argument("--floor", type=float, default=0.85, help="OOM back-off floor")
     _add_common(p)
 
-    p = sub.add_parser("nvdec", help="NVDEC sessions on an NVENC-encoded stream")
+    p = sub.add_parser("nvdec", help="NVDEC sessions over the committed synthetic clip")
     p.add_argument("--sessions", type=int, default=5, help="parallel decode sessions")
-    p.add_argument("--frames", type=int, default=64, help="frames to encode and decode")
     _add_common(p)
 
     p = sub.add_parser("nvjpeg", help="NVJPEG device decode vs CPU reference")
@@ -63,7 +62,6 @@ def main(argv=None) -> int:
     p.add_argument("--fraction", type=float, default=0.95)
     p.add_argument("--floor", type=float, default=0.85)
     p.add_argument("--sessions", type=int, default=5)
-    p.add_argument("--frames", type=int, default=64)
     p.add_argument("--count", type=int, default=32)
     _add_common(p)
 
@@ -83,7 +81,7 @@ def main(argv=None) -> int:
         if name == "mem":
             kw = {"fraction": args.fraction, "floor": args.floor}
         if name == "nvdec":
-            kw = {"sessions": args.sessions, "frames": args.frames}
+            kw = {"sessions": args.sessions}
         if name == "nvjpeg":
             kw = {"count": args.count}
         if name == "sm":

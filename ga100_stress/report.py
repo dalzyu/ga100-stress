@@ -28,6 +28,12 @@ def print_summary(results: list[Result]) -> bool:
     return all_pass
 
 
+def _json_default(o):
+    if hasattr(o, "item"):  # numpy scalars
+        return o.item()
+    raise TypeError(f"not JSON serializable: {type(o)}")
+
+
 def json_report(results: list[Result], gpu: dict, version: str) -> str:
     doc = {
         "tool": "ga100-stress",
@@ -39,4 +45,4 @@ def json_report(results: list[Result], gpu: dict, version: str) -> str:
         "results": [r.as_dict() for r in results],
         "all_pass": all(r.passed for r in results),
     }
-    return json.dumps(doc, indent=2)
+    return json.dumps(doc, indent=2, default=_json_default)

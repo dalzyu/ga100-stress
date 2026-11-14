@@ -56,12 +56,13 @@ def ecc_totals(index: int = 0) -> dict | None:
     """Aggregate ECC counters, or None when ECC is disabled."""
     row = _smi_rows(
         [
+            "index",
             "ecc.mode.current",
             "ecc.errors.corrected.aggregate.total",
             "ecc.errors.uncorrected.aggregate.total",
         ],
         index,
     )[0]
-    if row[0].lower() != "enabled":
+    if row[1].lower() != "enabled":
         return None
-    return {"corrected": int(row[1]), "uncorrected": int(row[2])}
+    return {"corrected": int(row[2]), "uncorrected": int(row[3])}

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import ctypes
-import glob
-import pathlib
 
 import numpy as np
 import torch
 
+from .cudart import load_cudart
 from .guard import require_bare_gpu
 from .report import Result
 
@@ -48,20 +47,6 @@ class _GlError(RuntimeError):
     pass
 
 
-def _load_cudart() -> ctypes.CDLL:
-    try:
-        return ctypes.CDLL("libcudart.so.12")
-    except OSError:
-        root = pathlib.Path(torch.__file__).parent
-        for pat in (
-            root / "lib" / "libcudart.so*",
-            root.parent / "nvidia" / "cuda_runtime" / "lib" / "libcudart.so*",
-        ):
-            for p in sorted(glob.glob(str(pat))):
-                return ctypes.CDLL(p)
-    raise _GlError("libcudart.so not found")
-
-
 def _bind(decls: dict[str, tuple], lib: ctypes.CDLL) -> None:
     for name, (res, args) in decls.items():
         fn = getattr(lib, name)
@@ -69,15 +54,37 @@ def _bind(decls: dict[str, tuple], lib: ctypes.CDLL) -> None:
         fn.argtypes = args
 
 
+def _ext(egl: ctypes.CDLL, name: str, restype, argtypes):
+    """Resolve an EGL extension function via eglGetProcAddress (not a direct export)."""
+    egl.eglGetProcAddress.restype = ctypes.c_void_p
+    egl.eglGetProcAddress.argtypes = [ctypes.c_char_p]
+    addr = egl.eglGetProcAddress(name.encode())
+    if not addr:
+        raise _GlError(f"EGL extension function {name} unavailable")
+    return ctypes.CFUNCTYPE(restype, *argtypes)(addr)
+
+
 def _nvidia_display(egl) -> int:
+    egl_query_devices = _ext(
+        egl,
+        "eglQueryDevicesEXT",
+        ctypes.c_uint,
+        [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_int)],
+    )
+    egl_get_platform_display = _ext(
+        egl,
+        "eglGetPlatformDisplayEXT",
+        ctypes.c_void_p,
+        [ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p],
+    )
     n = ctypes.c_int(0)
-    if egl.eglQueryDevicesEXT(0, None, ctypes.byref(n)) == 0 or n.value == 0:
+    if egl_query_devices(0, None, ctypes.byref(n)) == 0 or n.value == 0:
         raise _GlError("eglQueryDevicesEXT found no EGL devices")
     devices = (ctypes.c_void_p * n.value)()
-    if egl.eglQueryDevicesEXT(n.value, devices, ctypes.byref(n)) == 0:
+    if egl_query_devices(n.value, devices, ctypes.byref(n)) == 0:
         raise _GlError("eglQueryDevicesEXT failed")
     for dev in devices:
-        dpy = egl.eglGetPlatformDisplayEXT(_EGL_PLATFORM_DEVICE_EXT, dev, None)
+        dpy = egl_get_platform_display(_EGL_PLATFORM_DEVICE_EXT, dev, None)
         if not dpy:
             continue
         if egl.eglInitialize(dpy, None, None) == 0:
@@ -175,10 +182,6 @@ def run(device: int = 0) -> Result:
     notes: list[str] = []
 
     egl = ctypes.CDLL("libEGL.so.1")
-    egl.eglQueryDevicesEXT.restype = ctypes.c_int
-    egl.eglQueryDevicesEXT.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_int)]
-    egl.eglGetPlatformDisplayEXT.restype = ctypes.c_void_p
-    egl.eglGetPlatformDisplayEXT.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
     egl.eglInitialize.restype = ctypes.c_uint
     egl.eglInitialize.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
     egl.eglQueryString.restype = ctypes.c_char_p
@@ -282,10 +285,10 @@ def run(device: int = 0) -> Result:
             notes.append(f"FBO render differs from CPU reference by up to {max_diff}")
 
         # CUDA <-> GL interop: map the rendered texture into CUDA and read it back.
-        cudart = _load_cudart()
+        cudart = load_cudart()
         res = ctypes.c_void_p()
         st = cudart.cudaGraphicsGLRegisterImage(
-            ctypes.byref(res), ctypes.c_uint(tex), ctypes.c_uint(_GL_TEXTURE_2D), ctypes.c_uint(0)
+            ctypes.byref(res), tex.value, _GL_TEXTURE_2D, 0
         )
         if st != 0:
             raise _GlError(f"cudaGraphicsGLRegisterImage failed: {st}")

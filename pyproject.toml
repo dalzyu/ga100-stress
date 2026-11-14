@@ -16,8 +16,14 @@ dependencies = [
     "torchvision>=0.20",
 ]
 
+[project.optional-dependencies]
+dev = ["imageio-ffmpeg"]
+
 [project.scripts]
 ga100-stress = "ga100_stress.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["ga100_stress*"]
+
+[tool.setuptools.package-data]
+ga100_stress = ["data/*.mp4"]

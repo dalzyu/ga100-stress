@@ -8,12 +8,11 @@ headers (nvOpticalFlowCommon.h, nvOpticalFlowCuda.h).
 from __future__ import annotations
 
 import ctypes
-import glob
-import pathlib
 
 import numpy as np
 import torch
 
+from .cudart import load_cudart
 from .guard import require_bare_gpu
 from .report import Result
 
@@ -152,22 +151,6 @@ class _ApiFunctionList(ctypes.Structure):
     ]
 
 
-def _load_cudart() -> ctypes.CDLL:
-    try:
-        return ctypes.CDLL("libcudart.so.12")
-    except OSError:
-        import torch
-
-        root = pathlib.Path(torch.__file__).parent
-        for pat in (
-            root / "lib" / "libcudart.so*",
-            root.parent / "nvidia" / "cuda_runtime" / "lib" / "libcudart.so*",
-        ):
-            for p in sorted(glob.glob(str(pat))):
-                return ctypes.CDLL(p)
-    raise _OfaError("libcudart.so not found")
-
-
 def _memcpy(cudart: ctypes.CDLL, dst: int, src: int, count: int, kind: int) -> None:
     st = cudart.cudaMemcpy(
         ctypes.c_void_p(dst), ctypes.c_void_p(src), ctypes.c_size_t(count), ctypes.c_int(kind)
@@ -177,15 +160,14 @@ def _memcpy(cudart: ctypes.CDLL, dst: int, src: int, count: int, kind: int) -> N
 
 
 def _synthetic_nv12(width: int, height: int, device: int):
-    ys, xs = torch.meshgrid(
-        torch.arange(height, device=device, dtype=torch.float32),
-        torch.arange(width, device=device, dtype=torch.float32),
-        indexing="ij",
-    )
-    a = (128 + 60 * torch.sin(xs / 16) * torch.cos(ys / 16)).to(torch.uint8)
-    b = torch.roll(a, shifts=(3, 5), dims=(0, 1))
+    # Noise texture: unique local features, so the optical flow field is
+    # unambiguous (smooth gradients give the engine nothing to lock onto).
+    g = torch.Generator(device=device)
+    g.manual_seed(0x0FA)
+    y = torch.randint(0, 256, (height, width), dtype=torch.uint8, device=device, generator=g)
+    b = torch.roll(y, shifts=(3, 5), dims=(0, 1))
     uv = torch.full((height // 2, width), 128, dtype=torch.uint8, device=device)
-    return torch.cat([a, uv]).contiguous(), torch.cat([b, uv]).contiguous()
+    return torch.cat([y, uv]).contiguous(), torch.cat([b, uv]).contiguous()
 
 
 def run(device: int = 0, width: int = 512, height: int = 288) -> Result:
@@ -202,8 +184,11 @@ def run(device: int = 0, width: int = 512, height: int = 288) -> Result:
         raise _OfaError("NvOFGetMaxSupportedApiVersion failed")
     metrics["api_version"] = f"{maxver.value >> 4}.{maxver.value & 0xF}"
 
+    # The driver's newer ABIs extend NV_OF_INIT_PARAMS (e.g. predDirection);
+    # this file implements the 2.0 layouts, so request exactly that ABI.
+    _ABI_20 = 0x20
     fl = _ApiFunctionList()
-    st = lib.NvOFAPICreateInstanceCuda(ctypes.c_uint32(maxver.value), ctypes.byref(fl))
+    st = lib.NvOFAPICreateInstanceCuda(ctypes.c_uint32(min(maxver.value, _ABI_20)), ctypes.byref(fl))
     if st != 0:
         raise _OfaError(f"NvOFAPICreateInstanceCuda: {_STATUS_NAMES.get(st, st)}")
 
@@ -213,7 +198,7 @@ def run(device: int = 0, width: int = 512, height: int = 288) -> Result:
     if not ctx.value:
         raise _OfaError("no current CUDA context after torch init")
 
-    cudart = _load_cudart()
+    cudart = load_cudart()
 
     session = ctypes.c_void_p()
     st = fl.createOpticalFlow(ctx, ctypes.byref(session))

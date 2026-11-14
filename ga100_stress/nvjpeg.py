@@ -21,8 +21,26 @@ def run(device: int = 0, count: int = 32, size: int = 512) -> Result:
     metrics: dict = {}
     notes: list[str] = []
 
-    g = torch.Generator().manual_seed(0x5EED)
-    imgs = torch.randint(0, 256, (count, 3, size, size), dtype=torch.uint8, generator=g)
+    # Smooth gradients, not noise: random noise is the worst case for IDCT and
+    # chroma-upsampling differences between nvjpeg and libjpeg-turbo.
+    ys, xs = torch.meshgrid(
+        torch.arange(size, dtype=torch.float32),
+        torch.arange(size, dtype=torch.float32),
+        indexing="ij",
+    )
+    base = 128 + 60 * torch.sin(xs / 17) * torch.cos(ys / 23)
+    imgs = torch.stack(
+        [
+            torch.stack(
+                [
+                    (base + 40 * torch.sin(xs / 31 + i * 0.7)).clamp(0, 255),
+                    (base + 40 * torch.cos(ys / 29 + i * 0.5)).clamp(0, 255),
+                    (base + i).clamp(0, 255),
+                ]
+            ).to(torch.uint8)
+            for i in range(count)
+        ]
+    )
     jpegs = [encode_jpeg(img, quality=90) for img in imgs]
     refs = torch.stack([decode_jpeg(j) for j in jpegs])
 
