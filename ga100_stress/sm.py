@@ -11,10 +11,16 @@ import triton.language as tl
 
 from .guard import require_bare_gpu
 from .report import Result
+from .telemetry import Sampler, pct_of_peak
 
 _MASK32 = 0xFFFFFFFF
 _LCG_ITERS = 128
 _FMA_ITERS = 32
+_RATE_CHAINS = 8  # independent FMA chains per thread: hides FMA latency
+_RATE_ITERS = 1024
+_RATE_BLOCK = 256
+# GA100 non-tensor FMA peak per SM per clock (64 FP32 / 32 FP64 FMA lanes, 2 flops each)
+_PEAK_PER_SM_CLK = {torch.float32: 128, torch.float64: 64}
 
 
 def _lcg_ref(pids: np.ndarray, smids: np.ndarray, seed: int) -> np.ndarray:
@@ -76,19 +82,52 @@ def _check_fma(dtype: torch.dtype, device: int, n: int, rtol: float) -> tuple[bo
     return bool(rel.max() < rtol), float(rel.max())
 
 
-def _rate(dtype: torch.dtype, device: int, n: int, reps: int) -> float:
-    x = torch.linspace(0.5, 1.5, n, dtype=dtype, device=device)
-    y = torch.empty_like(x)
-    grid = (triton.cdiv(n, 1024),)
-    _fma_kernel[grid](x, y, n, BLOCK=1024)
+@triton.jit
+def _fma_rate_kernel(out_ptr, iters, BLOCK: tl.constexpr):
+    dt = out_ptr.dtype.element_ty
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    x = offs.to(dt) * 1e-7
+    c = tl.full([BLOCK], 0.9999999, dt)
+    d = tl.full([BLOCK], 1e-7, dt)
+    a0 = x
+    a1 = x + 1.0
+    a2 = x + 2.0
+    a3 = x + 3.0
+    a4 = x + 4.0
+    a5 = x + 5.0
+    a6 = x + 6.0
+    a7 = x + 7.0
+    for _ in range(iters):
+        a0 = tl.fma(a0, c, d)
+        a1 = tl.fma(a1, c, d)
+        a2 = tl.fma(a2, c, d)
+        a3 = tl.fma(a3, c, d)
+        a4 = tl.fma(a4, c, d)
+        a5 = tl.fma(a5, c, d)
+        a6 = tl.fma(a6, c, d)
+        a7 = tl.fma(a7, c, d)
+    tl.store(out_ptr + offs, a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7)
+
+
+def _rate(dtype: torch.dtype, device: int, sms: int, min_s: float = 1.0) -> tuple[float, dict]:
+    """Register-resident FMA throughput (TFLOPS) and the telemetry seen while it ran."""
+    programs = sms * 16
+    out = torch.empty(programs * _RATE_BLOCK, dtype=dtype, device=device)
+    _fma_rate_kernel[(programs,)](out, _RATE_ITERS, BLOCK=_RATE_BLOCK)
     torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    for _ in range(reps):
-        _fma_kernel[grid](x, y, n, BLOCK=1024)
-    torch.cuda.synchronize()
-    dt = time.perf_counter() - t0
-    flops = n * _FMA_ITERS * 3 * reps  # y*c, x*0.5, add
-    return flops / dt / 1e9
+    flops_per_launch = out.numel() * _RATE_CHAINS * _RATE_ITERS * 2
+    reps = 0
+    with Sampler(device) as s:
+        t0 = time.perf_counter()
+        while True:
+            _fma_rate_kernel[(programs,)](out, _RATE_ITERS, BLOCK=_RATE_BLOCK)
+            reps += 1
+            if reps % 8 == 0:
+                torch.cuda.synchronize()
+                dt = time.perf_counter() - t0
+                if dt >= min_s:
+                    break
+    return flops_per_launch * reps / dt / 1e12, s
 
 
 def run(device: int = 0, blocks: int = 4096) -> Result:
@@ -124,11 +163,21 @@ def run(device: int = 0, blocks: int = 4096) -> Result:
     metrics["fp64_ok"] = fp64_ok
 
     # throughput (reported, not asserted)
-    metrics["fp32_gflops"] = round(_rate(torch.float32, device, 1 << 28, reps=50), 1)
-    metrics["fp64_gflops"] = round(_rate(torch.float64, device, 1 << 27, reps=20), 1)
-    if metrics["fp32_gflops"] > 0:
-        metrics["fp64_to_fp32_ratio"] = round(
-            metrics["fp64_gflops"] / metrics["fp32_gflops"], 3
+    sms = torch.cuda.get_device_properties(device).multi_processor_count
+    telemetry = {}
+    for dtype, key in ((torch.float32, "fp32"), (torch.float64, "fp64")):
+        tflops, s = _rate(dtype, device, sms)
+        metrics[f"{key}_tflops"] = round(tflops, 2)
+        metrics[f"{key}_pct_of_peak_at_clock"] = pct_of_peak(
+            tflops, _PEAK_PER_SM_CLK[dtype], sms, s.mean_sm_mhz()
+        )
+        telemetry[key] = s.summary()
+    metrics["fp64_to_fp32_ratio"] = round(metrics["fp64_tflops"] / metrics["fp32_tflops"], 3)
+    metrics["telemetry"] = telemetry
+    if metrics["fp64_to_fp32_ratio"] < 0.25:
+        notes.append(
+            f"fp64 FMA runs at {metrics['fp64_to_fp32_ratio']} of the fp32 rate "
+            f"(GA100 design ratio 0.5)"
         )
 
     passed = int_ok and fp32_ok and fp64_ok

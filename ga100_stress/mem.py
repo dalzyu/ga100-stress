@@ -7,7 +7,7 @@ import time
 import numpy as np
 import torch
 
-from .guard import ecc_totals, require_bare_gpu
+from .guard import ecc_delta, ecc_totals, require_bare_gpu
 from .report import Result
 
 CHUNK_BYTES = 1 << 28  # 256 MiB
@@ -20,6 +20,22 @@ PROBE_ELEMS = 1 << 18  # 1 MiB content-verified slice per random source
 
 def _signed(p: int) -> int:
     return p - (1 << 32) if p >= (1 << 31) else p
+
+
+def _copy_gbps(dst: torch.Tensor, src: torch.Tensor, min_s: float = 0.5) -> float:
+    """Device-to-device copy bandwidth, read + write bytes counted."""
+    dst.copy_(src)
+    torch.cuda.synchronize()
+    reps = 0
+    t0 = time.perf_counter()
+    while True:
+        for _ in range(8):
+            dst.copy_(src)
+        reps += 8
+        torch.cuda.synchronize()
+        dt = time.perf_counter() - t0
+        if dt >= min_s:
+            return 2 * src.numel() * src.element_size() * reps / dt / 1e9
 
 
 def _allocate(device: int, total: int, fraction: float, floor: float):
@@ -107,22 +123,11 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
     torch.cuda.synchronize()
     verify_s = time.perf_counter() - t0
 
-    metrics["fill_gbps"] = round(allocated / fill_s / 1e9, 1)
-    metrics["verify_gbps"] = round(allocated / verify_s / 1e9, 1)
+    metrics["fill_s"] = round(fill_s, 3)
+    metrics["verify_s"] = round(verify_s, 3)
     metrics["chunks"] = n_chunks
+    if n_chunks >= 2:
+        metrics["copy_gbps"] = round(_copy_gbps(tensors[0], tensors[1]), 1)
 
-    if ecc0 is not None:
-        ecc1 = ecc_totals(device)
-        d_corr = ecc1["corrected"] - ecc0["corrected"]
-        d_unc = ecc1["uncorrected"] - ecc0["uncorrected"]
-        metrics["ecc_corrected_delta"] = d_corr
-        metrics["ecc_uncorrected_delta"] = d_unc
-        if d_unc != 0:
-            ok = False
-            notes.append(f"uncorrected ECC errors during test: {d_unc}")
-    else:
-        metrics["ecc_corrected_delta"] = None
-        metrics["ecc_uncorrected_delta"] = None
-        notes.append("ECC disabled; delta check skipped")
-
+    ok = ecc_delta(device, ecc0, metrics, notes) and ok
     return Result(name="memory", passed=ok, metrics=metrics, notes=notes)

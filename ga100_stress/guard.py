@@ -66,3 +66,19 @@ def ecc_totals(index: int = 0) -> dict | None:
     if row[1].lower() != "enabled":
         return None
     return {"corrected": int(row[2]), "uncorrected": int(row[3])}
+
+
+def ecc_delta(index: int, before: dict | None, metrics: dict, notes: list[str]) -> bool:
+    """Record ECC counter deltas since `before`; False iff uncorrected errors appeared."""
+    if before is None:
+        metrics["ecc_corrected_delta"] = None
+        metrics["ecc_uncorrected_delta"] = None
+        notes.append("ECC disabled; delta check skipped")
+        return True
+    after = ecc_totals(index)
+    d_unc = after["uncorrected"] - before["uncorrected"]
+    metrics["ecc_corrected_delta"] = after["corrected"] - before["corrected"]
+    metrics["ecc_uncorrected_delta"] = d_unc
+    if d_unc != 0:
+        notes.append(f"uncorrected ECC errors during test: {d_unc}")
+    return d_unc == 0

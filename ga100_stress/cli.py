@@ -7,17 +7,19 @@ import sys
 import time
 
 from . import __version__
-from . import gl, mem, nvdec, nvjpeg, ofa, sm
+from . import burn, gl, mem, nvdec, nvjpeg, ofa, sm, tensor
 from .guard import GuardError, require_bare_gpu
 from .report import Result, json_report, print_summary
 
 MODULES = {
     "sm": sm,
+    "tensor": tensor,
     "mem": mem,
     "nvdec": nvdec,
     "nvjpeg": nvjpeg,
     "ofa": ofa,
     "gl": gl,
+    "burn": burn,
 }
 
 
@@ -34,8 +36,12 @@ def main(argv=None) -> int:
     _add_common(parser)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("sm", help="SM coverage and compute correctness (FP32/FP64/INT)")
+    p = sub.add_parser("sm", help="SM coverage, FP32/FP64/INT correctness, FMA throughput")
     p.add_argument("--blocks", type=int, default=4096, help="blocks in the SMID sweep")
+    _add_common(p)
+
+    p = sub.add_parser("tensor", help="tensor-core GEMM exactness + throughput per dtype")
+    p.add_argument("--size", type=int, default=8192, help="square GEMM size (multiple of 128)")
     _add_common(p)
 
     p = sub.add_parser("mem", help="memory capacity, patterns, ECC delta, bandwidth")
@@ -57,12 +63,19 @@ def main(argv=None) -> int:
     p = sub.add_parser("gl", help="headless EGL GL render + CUDA interop")
     _add_common(p)
 
+    p = sub.add_parser("burn", help="sustained tensor-core load, bit-exact repeatability")
+    p.add_argument("--size", type=int, default=8192, help="square GEMM size (multiple of 128)")
+    p.add_argument("--seconds", type=float, default=60.0, help="load duration")
+    _add_common(p)
+
     p = sub.add_parser("all", help="run every subcommand")
     p.add_argument("--blocks", type=int, default=4096)
     p.add_argument("--fraction", type=float, default=0.95)
     p.add_argument("--floor", type=float, default=0.85)
     p.add_argument("--sessions", type=int, default=5)
     p.add_argument("--count", type=int, default=32)
+    p.add_argument("--size", type=int, default=8192)
+    p.add_argument("--seconds", type=float, default=60.0)
     _add_common(p)
 
     args = parser.parse_args(argv)
@@ -86,6 +99,10 @@ def main(argv=None) -> int:
             kw = {"count": args.count}
         if name == "sm":
             kw = {"blocks": args.blocks}
+        if name == "tensor":
+            kw = {"size": args.size}
+        if name == "burn":
+            kw = {"size": args.size, "seconds": args.seconds}
         t0 = time.perf_counter()
         try:
             r = module.run(device=args.device, **kw)
