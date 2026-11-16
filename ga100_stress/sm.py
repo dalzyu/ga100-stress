@@ -181,4 +181,4 @@ def run(device: int = 0, blocks: int = 4096) -> Result:
         )
 
     passed = int_ok and fp32_ok and fp64_ok
-    return Result(name="compute", passed=passed, metrics=metrics, notes=notes)
+    return Result(name="sm", passed=passed, metrics=metrics, notes=notes)

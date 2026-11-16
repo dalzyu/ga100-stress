@@ -3,27 +3,49 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
-from . import __version__
-from . import burn, gl, mem, nvdec, nvjpeg, ofa, sm, tensor
-from .guard import GuardError, require_bare_gpu
-from .report import Result, json_report, print_summary
+# nvidia-smi numbers GPUs in PCI bus order; make CUDA (torch, triton, NVDEC) agree with it.
+# Set before the test modules import those libraries.
+os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 
-MODULES = {
-    "sm": sm,
-    "tensor": tensor,
-    "mem": mem,
-    "nvdec": nvdec,
-    "nvjpeg": nvjpeg,
-    "ofa": ofa,
-    "gl": gl,
-    "burn": burn,
+from . import __version__  # noqa: E402
+from . import burn, gl, mem, nvdec, nvjpeg, ofa, sm, tensor  # noqa: E402
+from .guard import GuardError, require_bare_gpu  # noqa: E402
+from .report import Result, json_report, print_summary  # noqa: E402
+
+# subcommand -> (module, help, options); each option is (flag, type, default, help).
+SUBCOMMANDS = {
+    "sm": (sm, "SM coverage, FP32/FP64/INT correctness, FMA throughput", [
+        ("--blocks", int, 4096, "blocks in the SMID sweep"),
+    ]),
+    "tensor": (tensor, "tensor-core GEMM exactness + throughput per dtype", [
+        ("--size", int, 8192, "square GEMM size (multiple of 128)"),
+    ]),
+    "mem": (mem, "memory capacity, patterns, ECC delta, bandwidth", [
+        ("--fraction", float, 0.95, "fraction of memory to fill"),
+        ("--floor", float, 0.85, "OOM back-off floor"),
+    ]),
+    "nvdec": (nvdec, "NVDEC sessions over the committed synthetic clip", [
+        ("--sessions", int, 5, "parallel decode sessions"),
+    ]),
+    "nvjpeg": (nvjpeg, "NVJPEG device decode vs CPU reference", [
+        ("--count", int, 32, "images to decode"),
+    ]),
+    "ofa": (ofa, "optical flow accelerator, known-translation test", []),
+    "gl": (gl, "headless EGL GL render + CUDA interop", []),
+    "burn": (burn, "sustained tensor-core load, bit-exact repeatability", [
+        ("--size", int, 8192, "square GEMM size (multiple of 128)"),
+        ("--seconds", float, 60.0, "load duration"),
+    ]),
 }
 
 
-def _add_common(p: argparse.ArgumentParser) -> None:
+def _add_options(p: argparse.ArgumentParser, options) -> None:
+    for flag, typ, default, help_ in options:
+        p.add_argument(flag, type=typ, default=default, help=f"{help_} (default {default})")
     p.add_argument("--json", metavar="PATH", help="write verdict JSON to PATH ('-' = stdout)")
 
 
@@ -32,51 +54,13 @@ def main(argv=None) -> int:
         prog="ga100-stress",
         description="Stress and verification suite for GA100-class datacenter GPUs",
     )
-    parser.add_argument("--device", type=int, default=0, help="GPU index (default 0)")
-    _add_common(parser)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--device", type=int, default=0, help="GPU index as nvidia-smi shows it")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    p = sub.add_parser("sm", help="SM coverage, FP32/FP64/INT correctness, FMA throughput")
-    p.add_argument("--blocks", type=int, default=4096, help="blocks in the SMID sweep")
-    _add_common(p)
-
-    p = sub.add_parser("tensor", help="tensor-core GEMM exactness + throughput per dtype")
-    p.add_argument("--size", type=int, default=8192, help="square GEMM size (multiple of 128)")
-    _add_common(p)
-
-    p = sub.add_parser("mem", help="memory capacity, patterns, ECC delta, bandwidth")
-    p.add_argument("--fraction", type=float, default=0.95, help="fraction of memory to fill")
-    p.add_argument("--floor", type=float, default=0.85, help="OOM back-off floor")
-    _add_common(p)
-
-    p = sub.add_parser("nvdec", help="NVDEC sessions over the committed synthetic clip")
-    p.add_argument("--sessions", type=int, default=5, help="parallel decode sessions")
-    _add_common(p)
-
-    p = sub.add_parser("nvjpeg", help="NVJPEG device decode vs CPU reference")
-    p.add_argument("--count", type=int, default=32, help="images to decode")
-    _add_common(p)
-
-    p = sub.add_parser("ofa", help="optical flow accelerator, known-translation test")
-    _add_common(p)
-
-    p = sub.add_parser("gl", help="headless EGL GL render + CUDA interop")
-    _add_common(p)
-
-    p = sub.add_parser("burn", help="sustained tensor-core load, bit-exact repeatability")
-    p.add_argument("--size", type=int, default=8192, help="square GEMM size (multiple of 128)")
-    p.add_argument("--seconds", type=float, default=60.0, help="load duration")
-    _add_common(p)
-
-    p = sub.add_parser("all", help="run every subcommand")
-    p.add_argument("--blocks", type=int, default=4096)
-    p.add_argument("--fraction", type=float, default=0.95)
-    p.add_argument("--floor", type=float, default=0.85)
-    p.add_argument("--sessions", type=int, default=5)
-    p.add_argument("--count", type=int, default=32)
-    p.add_argument("--size", type=int, default=8192)
-    p.add_argument("--seconds", type=float, default=60.0)
-    _add_common(p)
+    for name, (_, help_, options) in SUBCOMMANDS.items():
+        _add_options(sub.add_parser(name, help=help_), options)
+    every = {o[0]: o for _, _, options in SUBCOMMANDS.values() for o in options}
+    _add_options(sub.add_parser("all", help="run every subcommand"), every.values())
 
     args = parser.parse_args(argv)
 
@@ -86,23 +70,11 @@ def main(argv=None) -> int:
         print(f"refusing to run: {e}", file=sys.stderr)
         return 2
 
-    names = list(MODULES) if args.command == "all" else [args.command]
+    names = list(SUBCOMMANDS) if args.command == "all" else [args.command]
     results: list[Result] = []
     for name in names:
-        module = MODULES[name]
-        kw = {}
-        if name == "mem":
-            kw = {"fraction": args.fraction, "floor": args.floor}
-        if name == "nvdec":
-            kw = {"sessions": args.sessions}
-        if name == "nvjpeg":
-            kw = {"count": args.count}
-        if name == "sm":
-            kw = {"blocks": args.blocks}
-        if name == "tensor":
-            kw = {"size": args.size}
-        if name == "burn":
-            kw = {"size": args.size, "seconds": args.seconds}
+        module, _, options = SUBCOMMANDS[name]
+        kw = {flag[2:]: getattr(args, flag[2:]) for flag, *_ in options}
         t0 = time.perf_counter()
         try:
             r = module.run(device=args.device, **kw)

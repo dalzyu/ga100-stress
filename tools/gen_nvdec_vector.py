@@ -14,9 +14,8 @@ from pathlib import Path
 import imageio_ffmpeg
 import numpy as np
 
-from ga100_stress.nvdec import HEIGHT, WIDTH, _source_frames
+from ga100_stress.nvdec import FRAMES, HEIGHT, WIDTH, _source_frames
 
-FRAMES = 24
 DATA = Path(__file__).resolve().parent.parent / "ga100_stress" / "data"
 
 

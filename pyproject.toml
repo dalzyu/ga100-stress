@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ga100-stress"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Stress and verification suite for GA100-class datacenter GPUs"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "torch>=2.4",
+    "torch>=2.9",
+    "numpy",
     "triton>=3.0",
     "PyNvVideoCodec>=1.0",
     "torchvision>=0.20",
@@ -19,11 +20,18 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["imageio-ffmpeg"]
 
+[project.urls]
+Repository = "https://github.com/dalzyu/ga100-stress"
+Issues = "https://github.com/dalzyu/ga100-stress/issues"
+
 [project.scripts]
 ga100-stress = "ga100_stress.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["ga100_stress*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "ga100_stress.__version__" }
 
 [tool.setuptools.package-data]
 ga100_stress = ["data/*.mp4"]

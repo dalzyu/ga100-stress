@@ -45,6 +45,7 @@ def pct_of_peak(rate_tflops: float, flop_per_sm_clk: int, sms: int, mhz: float |
     peak = flop_per_sm_clk * sms * mhz * 1e6 / 1e12
     return round(100.0 * rate_tflops / peak, 1)
 
+
 class Sampler:
     """Polls nvidia-smi in a background thread for the duration of a `with` block."""
 

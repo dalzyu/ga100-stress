@@ -42,6 +42,12 @@ observed. A unit that is throttled or fused slow shows a low percentage even at 
 A power- or clock-capped card shows normal percentages at a low MHz. The verdict notes
 flag any format far below the best one, and any active clock-event reasons.
 
+## Install
+
+```sh
+pip install git+https://github.com/dalzyu/ga100-stress
+```
+
 ## Usage
 
 ```sh
@@ -51,7 +57,12 @@ ga100-stress tensor --size 4096  # smaller GEMMs
 ga100-stress burn --seconds 600  # 10-minute sustained load
 ga100-stress mem --fraction 0.9  # cap allocation at 90%
 ga100-stress all --json out.json # machine-readable verdict
+ga100-stress --device 1 all      # second GPU, numbered as nvidia-smi shows it
 ```
+
+Exit status: `0` all pass, `1` any test failed, `2` refused to run (MIG on, GPU not
+found, `nvidia-smi` failed). `gl` renders on the first NVIDIA EGL device, whatever
+`--device` says.
 
 The `nvdec` test uses a committed synthetic clip (`ga100_stress/data/`);
 regenerate it with `tools/gen_nvdec_vector.py` (needs the `dev` extra).
@@ -70,7 +81,7 @@ Re-enable MIG and recreate instances afterwards if needed.
 ## Requirements
 
 - Linux, NVIDIA driver with GSP firmware, GA100-class GPU
-- Python ≥ 3.10 with torch, triton, PyNvVideoCodec, torchvision
+- Python ≥ 3.10, torch ≥ 2.9, triton, PyNvVideoCodec, torchvision (installed by `pip`)
 - `libEGL` (NVIDIA vendor EGL) for `gl`
 - `libnvidia-opticalflow.so.1` for `ofa`
 

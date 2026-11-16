@@ -75,7 +75,7 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
         tensors, allocated, frac = _allocate(device, total, fraction, floor)
     except torch.cuda.OutOfMemoryError:
         return Result(
-            name="memory",
+            name="mem",
             passed=False,
             metrics={"fraction_requested": fraction, "fraction_floor": floor},
             notes=[f"could not allocate even {floor:.0%} of {total / 2**30:.1f} GiB"],
@@ -85,6 +85,7 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
     n_chunks = len(tensors)
 
     # Fill: fixed patterns, plus one host-seeded random source copied to random chunks.
+    # The last chunk can be a shorter tail, so random chunks copy a prefix of the source.
     src_idx = next((i for i in range(n_chunks) if i % 16 == RANDOM_KIND), -1)
     src_ref = None
     t0 = time.perf_counter()
@@ -95,7 +96,7 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
             src_ref = rng.integers(-(2**31), 2**31 - 1, size=t.numel(), dtype=np.int32)
             t.copy_(torch.from_numpy(src_ref).to(device))
         elif kind == RANDOM_KIND:
-            t.copy_(tensors[src_idx])
+            t.copy_(tensors[src_idx][: t.numel()])
         else:
             t.fill_(_signed(PATTERNS[kind % len(PATTERNS)]))
     torch.cuda.synchronize()
@@ -112,7 +113,7 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
                 ok = False
                 notes.append(f"random source chunk {i}: host probe mismatch")
         elif kind == RANDOM_KIND:
-            if bool((t != tensors[src_idx]).any()):
+            if bool((t != tensors[src_idx][: t.numel()]).any()):
                 ok = False
                 notes.append(f"random chunk {i}: mismatch vs source")
         else:
@@ -130,4 +131,4 @@ def run(device: int = 0, fraction: float = 0.95, floor: float = 0.85) -> Result:
         metrics["copy_gbps"] = round(_copy_gbps(tensors[0], tensors[1]), 1)
 
     ok = ecc_delta(device, ecc0, metrics, notes) and ok
-    return Result(name="memory", passed=ok, metrics=metrics, notes=notes)
+    return Result(name="mem", passed=ok, metrics=metrics, notes=notes)
