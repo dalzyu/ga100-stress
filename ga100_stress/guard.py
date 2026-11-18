@@ -41,9 +41,12 @@ def gpu_info(index: int = 0) -> dict:
 
 
 def require_bare_gpu(index: int = 0) -> dict:
-    """Refuse to run under MIG: full-card coverage only holds on the bare device."""
+    """Refuse to run under MIG: full-card coverage only holds on the bare device.
+
+    A GPU without MIG support (nvidia-smi reports `[N/A]`) is always the bare device.
+    """
     info = gpu_info(index)
-    if info["mig_mode"].lower() != "disabled":
+    if info["mig_mode"].strip("[]").lower() not in ("disabled", "n/a", "not supported"):
         raise GuardError(
             f"MIG mode is {info['mig_mode']} on GPU {index}; full-card verification "
             f"requires the bare device. Tear down instances and disable MIG with "

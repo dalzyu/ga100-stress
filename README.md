@@ -70,7 +70,7 @@ regenerate it with `tools/gen_nvdec_vector.py` (needs the `dev` extra).
 ## MIG
 
 Full-card coverage claims only hold on the bare device. The suite refuses to
-run while MIG mode is enabled:
+run while MIG mode is enabled (a GPU without MIG, `[N/A]`, runs as is):
 
 ```sh
 sudo nvidia-smi -i 0 -mig 0   # destroys instances and disables MIG mode
